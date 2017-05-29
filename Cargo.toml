@@ -1,0 +1,7 @@
+[package]
+name = "multistagger"
+version = "0.1.0"
+authors = ["Tom Lingham <tjlingham@gmail.com>"]
+
+[dependencies]
+regex = "0.2"
