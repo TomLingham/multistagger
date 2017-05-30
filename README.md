@@ -21,7 +21,7 @@ FROM alpine:latest as second
 
 COPY --from=first /file.txt /test.txt
 
-RUN cat test.txt
+RUN cat /test.txt
 ```
 
 This is useful if you are working somewhere that can't update docker to the
