@@ -4,6 +4,8 @@ RUN npm --version
 
 COPY index.js /app/index.js
 
+RUN node /app/index.js
+
 # here is a comment
 
 
