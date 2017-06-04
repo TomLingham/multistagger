@@ -153,6 +153,7 @@ fn rewrite_from(line: &str) -> String {
     }
 }
 
+
 fn polyfill_multistage(dockerfile: String) {
 
     let mut dockerfile_lines: Vec<&str> = dockerfile
@@ -161,36 +162,41 @@ fn polyfill_multistage(dockerfile: String) {
         .collect();
     dockerfile_lines.retain(|x| !x.is_empty());
 
-    let mut next_lines: Vec<String> = vec![];
     let mut copy_map: BTreeMap<String, Vec<CopyFile>> = BTreeMap::new();
 
-    for line in dockerfile_lines.clone() {
-        if line.starts_with("COPY ") {
-            match prepare_copy(&line) {
-                Some(x) => {
-                    next_lines.push(rewrite_copy(&line));
-                    if ! copy_map.contains_key(&x.stage) {
-                        copy_map.insert(x.stage.clone(), vec![]);
+    let original_stages = build_stages(dockerfile_lines);
+    let mut next_stages: Vec<DockerStage> = vec![];
+
+    for stage in original_stages {
+        let next_steps: Vec<String> = stage.steps.iter()
+            .map(|line| {
+                if line.starts_with("COPY ") {
+                    match prepare_copy(&line) {
+                        Some(x) => {
+                            if ! copy_map.contains_key(&x.stage) {
+                                copy_map.insert(x.stage.clone(), vec![]);
+                            }
+                            copy_map.get_mut(&x.stage).unwrap().push(x);
+                            return rewrite_copy(&line)
+                        },
+                        None => ()
                     }
-                    copy_map.get_mut(&x.stage).unwrap().push(x);
-                },
-                None => next_lines.push(line.to_owned())
-            }
-        }
-        else if line.starts_with("FROM ") {
-            next_lines.push(rewrite_from(&line));
-        }
-        else {
-            next_lines.push(line.to_owned());
-        }
+                }
+                if line.starts_with("FROM ") {
+                    return rewrite_from(&line);
+                }
+
+                line.to_owned()
+            }).collect();
+
+        next_stages.push(DockerStage {
+            name: stage.name,
+            steps: next_steps,
+        });
     }
 
-    println!("NEXTLINES:  {:?}", next_lines);
 
-
-    let stages = build_stages(next_lines.iter().map(|x| &**x).collect());
-
-    for stage in stages {
+    for stage in next_stages {
         let mut Staggerfile = File::create("./.multistagger/Staggerfile").unwrap();
         Staggerfile.write_all(&stage.steps.join("\n").into_bytes());
 
@@ -198,14 +204,20 @@ fn polyfill_multistage(dockerfile: String) {
 
         println!("WOT:  {:?}", stage);
 
-        let result = rocker_build
-            .file(".multistagger/Staggerfile")
-            .tag(format!("multistagger_intermediate{}", stage.name).as_str())
-            .context(".")
-            .init();
+        let tag = format!("multistagger__intermediate__{}", stage.name);
 
-        println!("\n\n{:?}", result);
-        panic!("\n\n\n\n");
+        let start = rocker_build
+            .file(".multistagger/Staggerfile")
+            .tag(tag.as_str())
+            .context(".");
+
+        let result = start.init();
+
+        let container_id = Rocker::create(result.tag.unwrap())
+            .init()
+            .container_id;
+
+        println!("\n\n{:?}", container_id);
     }
 
     /*
