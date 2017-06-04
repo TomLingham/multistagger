@@ -11,6 +11,6 @@ RUN node /app/index.js
 
 FROM alpine:latest as alpine
 
-    COPY --from=node /app/file.txt /app/file.txt
+    COPY --from=node /app/file.txt /file.txt
 
-CMD ["cat", "/app/file.txt"]
+CMD ["cat", "/file.txt"]
