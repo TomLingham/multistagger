@@ -11,9 +11,11 @@ use rocker::Rocker;
 use rocker::DockerCommand;
 
 use regex::Regex;
+use uuid::Uuid;
 
 extern crate regex;
 extern crate rocker;
+extern crate uuid;
 
 #[macro_use]
 extern crate lazy_static;
@@ -52,10 +54,19 @@ fn prepare_copy(line: &str) -> Option<CopyFile> {
             let from_file = x.get(2).unwrap().as_str().to_owned();
             let to_file = x.get(3).unwrap().as_str().to_owned();
 
+            let file_name = regex_base_file_name
+                .captures(&from_file)
+                .unwrap()
+                .get(1)
+                .unwrap()
+                .as_str();
+
             Some(CopyFile {
+                origin_file_name: file_name.to_owned(),
+                origin_path: from_file.clone(),
                 stage: stage_name,
-                origin_path: from_file,
                 target_path: to_file,
+                id: Uuid::new_v4().simple().to_string(),
             })
         },
         None => None,
@@ -75,6 +86,7 @@ lazy_static! {
     static ref regex_docker_command: Regex = Regex::new(r"^([A-Z]+)").unwrap();
     static ref regex_docker_copy_from: Regex = Regex::new(r#"^COPY +--from=([^\s]+) ("[^"]+"|[^\s"]+) +("[^"]+"|[^\s"]+)$"#).unwrap();
     static ref regex_docker_from: Regex = Regex::new(r"^FROM +([^\s]+) +as +([^\s]+)$").unwrap();
+    static ref regex_base_file_name: Regex = Regex::new(r"([^/]+)$").unwrap();
 }
 
 #[derive(Debug)]
@@ -87,8 +99,11 @@ struct DockerStage {
 struct CopyFile {
     stage: String,
     origin_path: String,
+    origin_file_name: String,
     target_path: String,
+    id: String,
 }
+
 
 fn build_stages(lines: Vec<&str>) -> Vec<DockerStage> {
     let mut stages_register: Vec<DockerStage> = vec![];
@@ -130,13 +145,14 @@ fn build_stages(lines: Vec<&str>) -> Vec<DockerStage> {
     stages_register
 }
 
-fn rewrite_copy(line: &str) -> String {
+fn rewrite_copy(line: &str, copy_ref: &CopyFile) -> String {
+    println!("HERE IS THE COPYLINE: {:?}", copy_ref);
     match regex_docker_copy_from.captures(line) {
         Some(matches) => {
             let from_file = matches.get(2).unwrap().as_str();
             let to_file = matches.get(3).unwrap().as_str();
 
-            format!("COPY {} {}", from_file, to_file)
+            format!("COPY \"./.multistagger/files/{}/{}\" {}", copy_ref.id, copy_ref.origin_file_name, to_file)
         },
         None => line.to_owned()
     }
@@ -176,8 +192,9 @@ fn polyfill_multistage(dockerfile: String) {
                             if ! copy_map.contains_key(&x.stage) {
                                 copy_map.insert(x.stage.clone(), vec![]);
                             }
+                            let copy_line = rewrite_copy(&line, &x);
                             copy_map.get_mut(&x.stage).unwrap().push(x);
-                            return rewrite_copy(&line)
+                            return copy_line;
                         },
                         None => ()
                     }
@@ -194,6 +211,8 @@ fn polyfill_multistage(dockerfile: String) {
             steps: next_steps,
         });
     }
+
+    println!("{:?}", copy_map);
 
 
     for stage in next_stages {
@@ -217,6 +236,18 @@ fn polyfill_multistage(dockerfile: String) {
             .init()
             .container_id;
 
+        // If so, then that means we need to copy some files out of it
+        if copy_map.contains_key(&stage.name) {
+            let copys = copy_map.get_mut(&stage.name).unwrap();
+            for copy_ref in copys {
+                std::fs::create_dir(format!(".multistagger/files/{}", copy_ref.id));
+                Rocker::copy()
+                    .from_container(&container_id, &copy_ref.origin_path)
+                    .to_host(format!(".multistagger/files/{}/{}", copy_ref.id, copy_ref.origin_file_name).as_str())
+                    .init();
+            }
+        }
+
         println!("\n\n{:?}", container_id);
     }
 
@@ -239,6 +270,7 @@ fn cleanup() {
 
 fn prepare_workspace() {
     std::fs::create_dir(".multistagger");
+    std::fs::create_dir(".multistagger/files");
 }
 
 /*fn unuse() {
